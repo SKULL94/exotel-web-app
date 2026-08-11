@@ -1,0 +1,52 @@
+name: voip_poc
+description: VoIP POC with Exotel v1 API, Krisp AI & On-Device AI
+
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # WebSocket for audio streaming from Exotel
+  web_socket_channel: ^3.0.0
+  flutter_js: ^0.8.7
+
+  # HTTP client for Exotel API calls
+  http: ^1.2.2
+
+  # Cupertino icons
+  cupertino_icons: ^1.0.8
+
+  # Path provider for local storage
+  path_provider: ^2.1.1
+
+  # Local storage for call state persistence
+  shared_preferences: ^2.2.2
+
+  # Deepgram STT - real-time Hindi + English (Hinglish) transcription
+  deepgram_speech_to_text: ^4.1.0
+
+  # # On-device LLM - Gemma 2B for AI insights
+  # # Mobile: flutter_gemma (iOS/Android) - auto downloads model
+  # # Web: WebLLM via JavaScript interop (requires WebGPU)
+  # flutter_gemma: ^0.12.4
+
+  # Web package for JavaScript interop (WebLLM support)
+  # web: ^1.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/models/

@@ -1,0 +1,30 @@
+# VoIP POC WebSocket Server Dependencies
+
+# Web framework and server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+
+# Audio processing
+numpy>=1.24.0
+soundfile>=0.12.0
+
+# ai-coustics Sparrow SDK - Real-time noise cancellation for telephony
+# Docs: https://docs.ai-coustics.com
+# Install:
+#   pip install aic-sdk
+# Requires AIC_SDK_LICENSE environment variable.
+# Model (sparrow-s-8khz) is auto-downloaded on first run to ./models/sparrow/
+aic-sdk
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# LLM - Sarvam-m GGUF model support
+llama-cpp-python>=0.2.0
+
+# Development
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.25.0

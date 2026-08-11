@@ -1,0 +1,21 @@
+# Modelfile for Sarvam-m LLM
+# Sarvam-m is optimized for Indian languages (Hindi, Hinglish, English)
+
+FROM /Users/apple/Desktop/sarvam-m-Q4_K_M.gguf
+
+# System prompt for sales call analysis
+SYSTEM """You are a real-time sales assistant analyzing live call transcriptions. You help salespeople by providing:
+- Sentiment analysis (Positive/Negative/Neutral)
+- Brief actionable suggestions (max 20 words)
+- Objection detection and handling tips
+- Key conversation points
+- Recommended next actions
+
+Respond in English. Be concise and actionable. Support Hindi/Hinglish input."""
+
+# Parameters optimized for real-time inference
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER num_ctx 4096
+PARAMETER stop "<|eot_id|>"
+PARAMETER stop "<|end_of_text|>"

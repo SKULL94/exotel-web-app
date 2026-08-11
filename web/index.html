@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="VoIP POC with On-Device Gemma 2 LLM for Sales Insights">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="VoIP POC">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+  <title>VoIP POC - Gemma 2 for Sales</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!-- WebLLM for On-Device Gemma 2 -->
+  <script type="module">
+    import * as webllm from "https://esm.run/@mlc-ai/web-llm";
+    window.WebLLM = webllm;
+    window.WebLLMModule = webllm;
+    window.webLLMReady = true;
+    console.log('[Gemma] ✅ WebLLM module loaded');
+  </script>
+
+  <style>
+    #loading {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui;
+      z-index: 1000;
+      transition: opacity 0.5s ease-in-out;
+    }
+    #loading.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .loading-content {
+      text-align: center;
+      max-width: 400px;
+    }
+    .progress-bar {
+      width: 300px;
+      height: 4px;
+      background: #e0e0e0;
+      margin: 20px auto;
+      border-radius: 2px;
+    }
+    .progress-fill {
+      width: 0%;
+      height: 100%;
+      background: #4CAF50;
+      transition: width 0.3s;
+      border-radius: 2px;
+    }
+    .error {
+      color: #d32f2f;
+    }
+    .success {
+      color: #388e3c;
+    }
+  </style>
+
+  <script>
+    // ============================================
+    // Gemma 2 Configuration for Sales Insights
+    // ============================================
+    var webLLMEngine = null;
+    var webLLMStatus = 'not_initialized';
+    var webLLMProgress = 0;
+    var webLLMError = null;
+    var webLLMStats = {
+      loadTime: 0,
+      totalTokens: 0,
+      totalTime: 0
+    };
+
+    // Model configuration - Gemma 2 models from mlc-ai
+    // Note: Model IDs should NOT have mlc-ai/ prefix for CreateMLCEngine
+    const GEMMA_MODELS = {
+      // Recommended: Gemma-2-2B (fast, real-time insights)
+      'gemma-2b': 'gemma-2-2b-it-q4f16_1-MLC',
+
+      // Alternative: Larger Gemma-2-9B (more capable, slower)
+      'gemma-9b': 'gemma-2-9b-it-q4f16_1-MLC',
+
+      // Keep some Llama options as fallbacks
+      'llama-3b': 'Llama-3.2-3B-Instruct-q4f16_1-MLC',
+      'llama-1b': 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+    };
+
+    // Function to hide loading screen and show Flutter
+    function hideLoadingAndShowFlutter() {
+      const loadingEl = document.getElementById('loading');
+      if (loadingEl) {
+        loadingEl.classList.add('hidden');
+        setTimeout(() => {
+          loadingEl.style.display = 'none';
+        }, 500);
+      }
+      console.log('[Gemma] Loading screen hidden, Flutter UI visible');
+    }
+
+    // Check if Flutter is ready
+    function isFlutterReady() {
+      return window.flutterWebRenderer !== undefined || 
+             document.querySelector('flutter-view') !== null;
+    }
+
+    // Wait for Flutter to be ready
+    function waitForFlutter(timeout = 30000) {
+      return new Promise((resolve, reject) => {
+        const startTime = Date.now();
+        const checkInterval = setInterval(() => {
+          if (isFlutterReady()) {
+            clearInterval(checkInterval);
+            resolve(true);
+          } else if (Date.now() - startTime > timeout) {
+            clearInterval(checkInterval);
+            reject(new Error('Flutter failed to load within timeout'));
+          }
+        }, 100);
+      });
+    }
+
+    // Check WebGPU availability
+    async function checkWebGPU() {
+      try {
+        if (!navigator.gpu) {
+          console.log('[Gemma] ❌ WebGPU not available');
+          return { available: false, error: 'WebGPU not supported. Use Chrome/Edge/Opera.' };
+        }
+        
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          console.log('[Gemma] ❌ No WebGPU adapter');
+          return { available: false, error: 'No GPU adapter found' };
+        }
+        
+        console.log('[Gemma] ✅ WebGPU available:', adapter.name || 'Unknown');
+        return { available: true, adapter: adapter.name };
+      } catch (e) {
+        console.error('[Gemma] WebGPU check error:', e);
+        return { available: false, error: e.message };
+      }
+    }
+
+    // Initialize Gemma model
+    async function initWebLLM(modelKey = 'gemma-2b', progressCallback) {
+      // Guard: Already ready - return immediately
+      if (webLLMStatus === 'ready' && webLLMEngine) {
+        console.log('[Gemma] Already initialized, returning cached engine');
+        const loadTime = webLLMStats.loadTime || 0;
+        if (progressCallback) progressCallback(1.0, 'Already loaded');
+
+        // Still hide loading screen if visible
+        try {
+          await waitForFlutter();
+          hideLoadingAndShowFlutter();
+        } catch (e) {}
+
+        return {
+          success: true,
+          model: GEMMA_MODELS[modelKey] || modelKey,
+          loadTime
+        };
+      }
+
+      // Guard: Currently initializing - wait for it instead of restarting
+      if (webLLMStatus === 'initializing') {
+        console.log('[Gemma] Waiting for ongoing initialization...');
+        await new Promise((resolve) => {
+          const check = setInterval(() => {
+            if (webLLMStatus !== 'initializing') {
+              clearInterval(check);
+              resolve();
+            }
+          }, 100);
+        });
+
+        if (webLLMStatus === 'ready') {
+          const loadTime = webLLMStats.loadTime || 0;
+          if (progressCallback) progressCallback(1.0, 'Loaded');
+          return {
+            success: true,
+            model: GEMMA_MODELS[modelKey] || modelKey,
+            loadTime
+          };
+        } else {
+          return { success: false, error: webLLMError || 'Initialization failed' };
+        }
+      }
+
+      try {
+        console.log(`[Gemma] 🚀 Starting initialization with ${modelKey}...`);
+        webLLMStatus = 'initializing';
+        webLLMProgress = 0;
+        webLLMError = null;
+        
+        const startTime = performance.now();
+
+        // Wait for WebLLM module
+        let attempts = 0;
+        while (!window.WebLLMModule && attempts < 50) {
+          await new Promise(r => setTimeout(r, 100));
+          attempts++;
+        }
+
+        if (!window.WebLLMModule) {
+          throw new Error('WebLLM module failed to load');
+        }
+
+        // Check WebGPU
+        const gpuCheck = await checkWebGPU();
+        if (!gpuCheck.available) {
+          throw new Error(gpuCheck.error);
+        }
+
+        // Get model ID
+        const modelId = GEMMA_MODELS[modelKey] || GEMMA_MODELS['gemma-2b'];
+        console.log(`[Gemma] Selected model: ${modelId}`);
+        console.log(`[Gemma] Available WebLLM functions:`, Object.keys(window.WebLLMModule));
+
+        // Progress callback
+        const initProgressCallback = (report) => {
+          webLLMProgress = report.progress || 0;
+          const text = report.text || '';
+          console.log(`[Gemma] 📥 ${(webLLMProgress * 100).toFixed(1)}% - ${text}`);
+
+          // Update loading UI
+          const statusEl = document.getElementById('loading-status');
+          const progressEl = document.querySelector('.progress-fill');
+          const detailEl = document.getElementById('loading-detail');
+
+          if (statusEl) statusEl.textContent = `Loading: ${(webLLMProgress * 100).toFixed(1)}%`;
+          if (progressEl) progressEl.style.width = `${webLLMProgress * 100}%`;
+          if (detailEl) detailEl.textContent = text;
+
+          if (progressCallback) {
+            progressCallback(webLLMProgress, text);
+          }
+        };
+
+        // Create engine - try different methods
+        console.log(`[Gemma] Creating MLCEngine for ${modelId}...`);
+
+        try {
+          // Method 1: CreateMLCEngine (standard)
+          if (window.WebLLMModule.CreateMLCEngine) {
+            webLLMEngine = await window.WebLLMModule.CreateMLCEngine(
+              modelId,
+              { initProgressCallback: initProgressCallback }
+            );
+          }
+          // Method 2: MLCEngine constructor
+          else if (window.WebLLMModule.MLCEngine) {
+            webLLMEngine = new window.WebLLMModule.MLCEngine();
+            await webLLMEngine.reload(modelId, { initProgressCallback: initProgressCallback });
+          }
+          // Method 3: CreateEngine (older API)
+          else if (window.WebLLMModule.CreateEngine) {
+            webLLMEngine = await window.WebLLMModule.CreateEngine(modelId, initProgressCallback);
+          }
+          else {
+            throw new Error('No compatible WebLLM engine creation method found');
+          }
+        } catch (engineError) {
+          console.error('[Gemma] Engine creation failed:', engineError);
+          throw engineError;
+        }
+
+        webLLMStats.loadTime = (performance.now() - startTime) / 1000;
+        webLLMStatus = 'ready';
+        webLLMProgress = 1.0;
+        
+        console.log(`[Gemma] ✅ Model ready in ${webLLMStats.loadTime.toFixed(1)}s`);
+        
+        // Update UI
+        document.getElementById('loading-status').innerHTML = '<span class="success">✅ Gemma 2 ready for sales insights!</span>';
+        document.getElementById('loading-detail').textContent = `Loaded in ${webLLMStats.loadTime.toFixed(1)}s`;
+        
+        // Wait for Flutter to be ready then hide loading
+        try {
+          await waitForFlutter();
+          console.log('[Gemma] Flutter is ready, hiding loading screen...');
+          hideLoadingAndShowFlutter();
+        } catch (e) {
+          console.warn('[Gemma] Flutter not ready, but model is loaded. Waiting 2 more seconds...');
+          setTimeout(hideLoadingAndShowFlutter, 2000);
+        }
+        
+        return { 
+          success: true, 
+          model: modelId,
+          loadTime: webLLMStats.loadTime 
+        };
+
+      } catch (e) {
+        console.error('[Gemma] ❌ Initialization error:', e);
+        webLLMStatus = 'error';
+        webLLMError = e.message;
+        
+        document.getElementById('loading-status').innerHTML = '<span class="error">❌ Error loading model</span>';
+        document.getElementById('loading-detail').textContent = e.message;
+        
+        setTimeout(async () => {
+          try {
+            await waitForFlutter();
+            hideLoadingAndShowFlutter();
+          } catch {}
+        }, 5000);
+        
+        return { success: false, error: e.message };
+      }
+    }
+
+    // Generate response function optimized for sales insights
+    async function generateWebLLMResponse(prompt, options = {}) {
+      try {
+        if (!webLLMEngine) {
+          throw new Error('Model not initialized');
+        }
+        if (webLLMStatus !== 'ready') {
+          throw new Error(`Model not ready: ${webLLMStatus}`);
+        }
+
+        const {
+          maxTokens = 100,  // Smaller for faster real-time insights
+          temperature = 0.3, // Lower for consistent sales advice
+          topP = 0.9,
+          streamCallback = null
+        } = options;
+
+        console.log('[Gemma] Generating sales insight...');
+        const startTime = performance.now();
+
+        // Optimized system prompt for sales
+        const messages = [
+          { 
+            role: "system", 
+            content: "You are a real-time sales coach. Provide brief, actionable insights during live calls. Keep responses under 20 words unless summarizing." 
+          },
+          { role: "user", content: prompt }
+        ];
+
+        let fullResponse = '';
+
+        if (streamCallback) {
+          const asyncChunkGenerator = await webLLMEngine.chat.completions.create({
+            messages: messages,
+            temperature: temperature,
+            max_tokens: maxTokens,
+            top_p: topP,
+            stream: true
+          });
+
+          for await (const chunk of asyncChunkGenerator) {
+            const tokenContent = chunk.choices[0]?.delta?.content || '';
+            if (tokenContent) {
+              fullResponse += tokenContent;
+              streamCallback(tokenContent, fullResponse);
+            }
+          }
+        } else {
+          const response = await webLLMEngine.chat.completions.create({
+            messages: messages,
+            temperature: temperature,
+            max_tokens: maxTokens,
+            top_p: topP,
+            stream: false
+          });
+
+          fullResponse = response.choices[0]?.message?.content || '';
+        }
+
+        const elapsed = (performance.now() - startTime) / 1000;
+        webLLMStats.totalTokens += fullResponse.split(' ').length;
+        webLLMStats.totalTime += elapsed;
+
+        console.log(`[Gemma] ✅ Insight generated in ${elapsed.toFixed(2)}s`);
+        
+        return { 
+          success: true, 
+          response: fullResponse,
+          stats: {
+            time: elapsed,
+            tokens: fullResponse.split(' ').length
+          }
+        };
+
+      } catch (e) {
+        console.error('[Gemma] Generation error:', e);
+        return { success: false, error: e.message };
+      }
+    }
+
+    // Get model status
+    function getWebLLMStatus() {
+      return {
+        status: webLLMStatus,
+        progress: webLLMProgress,
+        error: webLLMError,
+        ready: webLLMStatus === 'ready',
+        stats: { ...webLLMStats },
+        availableModels: Object.keys(GEMMA_MODELS)
+      };
+    }
+
+    // Unload model
+    async function unloadWebLLM() {
+      try {
+        if (webLLMEngine) {
+          await webLLMEngine.unload();
+          webLLMEngine = null;
+        }
+        webLLMStatus = 'unloaded';
+        console.log('[Gemma] Model unloaded');
+        return { success: true };
+      } catch (e) {
+        console.error('[Gemma] Unload error:', e);
+        return { success: false, error: e.message };
+      }
+    }
+
+    // Reset conversation
+    function resetWebLLMConversation() {
+      try {
+        if (webLLMEngine) {
+          webLLMEngine.resetChat();
+          console.log('[Gemma] Conversation reset');
+          return true;
+        }
+        return false;
+      } catch (e) {
+        console.error('[Gemma] Reset error:', e);
+        return false;
+      }
+    }
+
+    // Get memory info
+    function getWebLLMMemoryInfo() {
+      try {
+        if (webLLMEngine && webLLMEngine.getMemoryInfo) {
+          const info = webLLMEngine.getMemoryInfo();
+          return {
+            used: (info.used / (1024 * 1024 * 1024)).toFixed(2) + ' GB',
+            total: (info.total / (1024 * 1024 * 1024)).toFixed(2) + ' GB',
+            peak: (info.peak / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
+          };
+        }
+        return {};
+      } catch (e) {
+        return { error: e.message };
+      }
+    }
+
+    // Get model size
+    function getModelSize(modelKey) {
+      const sizes = {
+        'gemma-2b': '~1.3GB',
+        'gemma-9b': '~5.2GB',
+        'llama-3b': '~2.1GB',
+        'llama-8b': '~4.7GB'
+      };
+      return sizes[modelKey] || 'Unknown';
+    }
+
+    // Clear cache
+    async function clearModelCache() {
+      try {
+        if (webLLMEngine) {
+          await unloadWebLLM();
+        }
+        
+        const dbs = await indexedDB.databases();
+        for (const db of dbs) {
+          if (db.name.includes('gemma') || db.name.includes('webllm')) {
+            indexedDB.deleteDatabase(db.name);
+          }
+        }
+        
+        console.log('[Gemma] Cache cleared');
+        return true;
+      } catch (e) {
+        console.error('[Gemma] Cache clear error:', e);
+        return false;
+      }
+    }
+
+    // Auto-initialize when page loads with Gemma-2-2B
+    window.addEventListener('load', async function() {
+      console.log('[Gemma] Page loaded, checking environment...');
+      
+      document.getElementById('loading-status').textContent = 'Checking WebGPU...';
+      
+      const gpuCheck = await checkWebGPU();
+      if (!gpuCheck.available) {
+        document.getElementById('loading-status').innerHTML = '<span class="error">❌ WebGPU not available</span>';
+        document.getElementById('loading-detail').textContent = gpuCheck.error;
+        document.getElementById('loading-hint').textContent = 'Please use Chrome, Edge, or Opera browser.';
+        
+        setTimeout(async () => {
+          try {
+            await waitForFlutter();
+            hideLoadingAndShowFlutter();
+          } catch (e) {
+            console.error('Flutter failed to load:', e);
+          }
+        }, 3000);
+        
+        return;
+      }
+
+      await new Promise(r => setTimeout(r, 500));
+      
+      // Initialize with Gemma-2-2B for fast sales insights
+      initWebLLM('gemma-2b');
+    });
+
+    // Expose functions to Flutter
+    window.llamaFunctions = {
+      init: initWebLLM,
+      generate: generateWebLLMResponse,
+      status: getWebLLMStatus,
+      unload: unloadWebLLM,
+      reset: resetWebLLMConversation,
+      memory: getWebLLMMemoryInfo,
+      clearCache: clearModelCache,
+      models: GEMMA_MODELS,
+      getModelSize: getModelSize
+    };
+
+    document.addEventListener('flutter-first-frame', function() {
+      console.log('[Gemma] Flutter first frame rendered');
+      if (webLLMStatus === 'ready') {
+        hideLoadingAndShowFlutter();
+      }
+    });
+  </script>
+  
+  <!-- Load Flutter -->
+  <script src="flutter_bootstrap.js" async></script>
+</head>
+<body>
+  <!-- Loading indicator -->
+  <div id="loading">
+    <div class="loading-content">
+      <h2>Loading Sales Coach with Gemma 2</h2>
+      <p id="loading-status" style="margin: 20px 0; font-weight: bold;">Initializing...</p>
+      <div class="progress-bar">
+        <div class="progress-fill"></div>
+      </div>
+      <p id="loading-detail" style="color: #666; font-size: 14px;">Checking system...</p>
+      <p id="loading-hint" style="color: #999; font-size: 12px; margin-top: 20px;">
+        First load will download ~1.3GB Gemma 2 model. Fast for real-time insights!
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const modelReadyCheck = setInterval(() => {
+      if (webLLMStatus === 'ready' && document.getElementById('loading').style.display !== 'none') {
+        const flutterRoot = document.querySelector('flutter-view') || 
+                           document.querySelector('[flutter-view]') ||
+                           document.getElementById('flutter-view');
+        
+        if (flutterRoot || document.body.children.length > 2) {
+          clearInterval(modelReadyCheck);
+          hideLoadingAndShowFlutter();
+        }
+      }
+    }, 500);
+
+    // Increased timeout to 5 minutes for first-time model download (~1.3GB)
+    setTimeout(() => {
+      clearInterval(modelReadyCheck);
+      if (document.getElementById('loading').style.display !== 'none') {
+        console.log('[Gemma] Force hiding loading screen after timeout');
+        hideLoadingAndShowFlutter();
+      }
+    }, 300000);
+  </script>
+</body>
+</html>
